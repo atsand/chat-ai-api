@@ -1,9 +1,10 @@
-import type express from "express";
-import { Request, Response } from "express";
-import { CHATS, USERS } from '../db/schema.js';
 import { DB } from '../config/database.js';
-import { eq } from "drizzle-orm";
+import { CHATS, USERS } from '../db/schema.js';
+import { desc, eq } from "drizzle-orm";
+import { Request, Response } from "express";
+import { ChatCompletionMessageParam } from "openai/resources.mjs";
 import { StreamChat } from "stream-chat";
+import type express from "express";
 import OpenAI from "openai";
 
 // Initialize Stream Client
@@ -12,7 +13,8 @@ const CHAT_CLIENT = StreamChat.getInstance(process.env.STREAM_API_KEY!, process.
 const OPEN_AI = new OpenAI({ apiKey: process.env.OPEN_AI_API_KEY! });
 
 export default function (APP: express.Application) {
-  // Send message to OpenAi
+
+// Send message to OpenAi
 APP.post('/chat', async (req: Request, res: Response): Promise<any> => {
   const { message, userId } = req.body ?? {};
 
@@ -28,10 +30,40 @@ APP.post('/chat', async (req: Request, res: Response): Promise<any> => {
       return res.status(404).json({ error: 'User not found. Please register first.' });
     }
 
+    // Fetch users past messages for context
+    const RECENT_HISTORY = await DB
+      .select()
+      .from(CHATS)
+      .where(eq(CHATS.userId, userId))
+      .orderBy(desc(CHATS.createdAt))
+      .limit(10);
+    
+    // Re-order by createdAt asc
+    const SORTED_HISTORY = RECENT_HISTORY.sort((a, b) => {
+      return a.createdAt.getTime() - b.createdAt.getTime();
+    })
+    
+    // Format chat history for OpenAi context
+    const CONVERSATION: ChatCompletionMessageParam[] = SORTED_HISTORY.flatMap((chat) => {
+      return [
+        {
+          content: chat.reply,
+          role: 'assistant'
+        },
+        {
+          content: chat.message,
+          role: 'user'
+        }
+      ]
+    });
+
+    // Add latest message to the conversation
+    CONVERSATION.push({ role: 'user', content: message });
+
     // Send message to OpenAi GPT-4
     const RESPONSE = await OPEN_AI.chat.completions.create({
       model: 'gpt-4.1',
-      messages: [{ role: 'user', content: message }]
+      messages: CONVERSATION as ChatCompletionMessageParam[]
     });
 
     // Check for existing uer in db
@@ -67,8 +99,8 @@ APP.post('/chat', async (req: Request, res: Response): Promise<any> => {
 })
 
 // Get chat history for a user
-APP.post('/get-messages', async (req: Request, res: Response): Promise<any> => {
-  const { userId } = req.body ?? {};
+  APP.post('/get-messages', async (req: Request, res: Response): Promise<any> => {
+    const { userId } = req.body ?? {};
 
   if (!userId) {
     return res.status(400).json({ error: 'User ID is required ' });

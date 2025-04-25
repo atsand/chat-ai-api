@@ -46,7 +46,7 @@ export default function (APP: express.Application) {
         await DB.insert(USERS).values({ userId: USER_ID, name, email });
       }
       
-      res.status(200).json({ USER_ID, name, email });
+      res.status(200).json({ userId: USER_ID, name, email });
     } catch (error) {
       res.status(500).json({ error: 'Internal Server Error' });
     }
